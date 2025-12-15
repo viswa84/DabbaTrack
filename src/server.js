@@ -4,6 +4,7 @@ const cors = require('cors');
 const { typeDefs, resolvers } = require('./schema');
 const { authMiddleware } = require('./auth');
 
+
 async function startServer() {
   const app = express();
   app.use(cors());
@@ -24,6 +25,7 @@ async function startServer() {
       name: 'DabbaTrack API by vishwanth Gouda',
       description: 'GraphQL API for dabba (tiffin), attendance, and billing',
       graphqlPath: '/graphql',
+      version :"0.2",
     });
   });
 
