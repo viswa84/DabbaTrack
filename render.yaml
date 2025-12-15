@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: dabbatrack-api
+    env: node
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CUSTOMER_OTP
+        value: "1234"
+      - key: VENDOR_OTP
+        value: "2345"

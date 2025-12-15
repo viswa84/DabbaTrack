@@ -1,11 +1,11 @@
 # DabbaTrack
 
-Backend GraphQL API starter for an Indian dabba (tiffin) service. It supports vendor/staff logins, customer attendance tracking, daily opt-outs, billing snapshots, and a roadmap for expanding into web/mobile apps.
+Backend GraphQL API starter for an Indian dabba (tiffin) service. It now captures daily skip/pause flows, cutoff checks, dashboard snapshots, and monthly usage with a roadmap for a full Postgres/Prisma stack.
 
 ## Tech stack
 - **Runtime:** Node.js (Express 4) with Apollo Server (GraphQL)
 - **Auth:** JWT (seeded users for quick testing)
-- **Data layer:** In-memory store for rapid prototyping (swap with Postgres + Prisma or MongoDB later)
+- **Data layer:** PostgreSQL via `pg` (in-memory seed removed)
 - **Dev tooling:** Nodemon for local hot-reload
 
 ## Quick start
@@ -13,28 +13,140 @@ Backend GraphQL API starter for an Indian dabba (tiffin) service. It supports ve
    ```bash
    npm install
    ```
-2. Run the API:
+2. Provide a PostgreSQL connection string as `DATABASE_URL` (and `PGSSL=true` when SSL is required). Override `CUSTOMER_OTP` (`1234` by default) and `VENDOR_OTP` (`2345`) if you want different static codes while wiring a real OTP service.
+3. Run the API:
    ```bash
    npm run dev
    # or: npm start
    ```
-3. Open the GraphQL Playground at `http://localhost:4000/graphql`.
+4. Open the GraphQL Playground at `http://localhost:4000/graphql`.
+
+### Backend folders (GraphQL routes by feature)
+- `src/modules/users` – login + user CRUD helpers
+- `src/modules/customers` – customer create/read with address/dietary notes
+- `src/modules/attendance` – attendance upsert (present/absent/skip) and opt-outs
+- `src/modules/pauses` – pause window create/list/isPaused checks
+- `src/modules/plans` – plan upsert and payment markers
+- `src/modules/dashboard` – dashboard counts, billing summary, monthly usage rollups
+- `src/db` – PostgreSQL pool shared by all resolvers (set `DATABASE_URL`)
 
 ### Seeded accounts
-- Admin: `boss@dabbatrack.in` / `admin123`
-- Dispatch runner: `runner@dabbatrack.in` / `runfast`
+- Admin / mess owner: `boss@dabbatrack.in` with OTP `2345`
+- Dispatch runner: `runner@dabbatrack.in` with OTP `2345`
+- Any `CUSTOMER` role user can log in with OTP `1234`
 
-## GraphQL schema highlights
-- **Queries**: `me`, `customers`, `customer`, `attendance`, `optOuts`, `dashboard(date)`, `billingSummary`
-- **Mutations**: `login`, `createCustomer`, `recordAttendance`, `setOptOut`, `upsertPlan`, `markPayment`
-- **Core entities**: `Customer`, `Attendance`, `TiffinPlan`, `DashboardSummary`
+## Complete feature list
+**MVP**
+- Customer records with plan + contact + dietary notes
+- Static OTP-based JWT login for admin/vendor (2345) and customers (1234) until SMS integration
+- Daily attendance capture (present/absent), opt-out for a specific slot, and pause windows
+- Same-day skip cutoff (10:00 AM) enforced on `setOptOut`
+- Dashboard for a given date: total customers, scheduled vs skipped vs paused, delivered, unpaid alerts, opt-out list
+- Monthly usage per customer (boxes taken, skipped, paused slots) for billing sanity
+- Manual payment marking per customer/plan
 
-### Sample operations
+**Future**
+- Real OTP delivery (SMS/WhatsApp), refresh tokens, and device binding
+- Route/area tagging for runners; offline queue in mobile app
+- Auto-pro-rating of invoices for skipped/paused slots; PDF/UPI links
+- Feedback/rating per meal, allergy calendar, weekday menu variations
+- Multi-mess marketplace view so customers can browse other vendors nearby
+- Web push/WhatsApp reminders before cutoff; SLA alerts for late deliveries (optional)
+
+## Database schema (PostgreSQL + Prisma target)
+- **User**: id (uuid), name, email (unique), phone, role (ADMIN/DISPATCH/CUSTOMER), passwordHash, createdAt
+- **Customer**: id, userId (nullable for customer login), name, phone, email, address, dietaryNotes, status (ACTIVE/PAUSED/STOPPED), createdAt
+- **TiffinPlan**: id, customerId, startDate, billingCycle (MONTHLY/QUARTERLY), monthlyRate, mealsPerDay (1/2), status, lastPaymentStatus, lastPaymentAt
+- **Attendance**: id, customerId, date, slot (LUNCH/DINNER), status (PRESENT/ABSENT/SKIPPED), note, recordedBy
+- **PauseWindow**: id, customerId, startDate, endDate, reason, createdBy
+- **Invoice**: id, customerId, month, amount, status (DUE/PAID/PARTIAL), issuedAt, paidAt, adjustments
+
+## GraphQL schema (current prototype)
+Types: `User`, `Customer`, `Attendance`, `TiffinPlan`, `PauseWindow`, `DashboardSummary`, `BillingSummary`, `CustomerUsage`
+
+Queries:
+- `me`
+- `customers(status)`
+- `customer(id)`
+- `attendance(date, slot, customerId)`
+- `optOuts(date, slot)`
+- `dashboard(date)`
+- `billingSummary`
+- `monthlyUsage(month)`
+- `monthlyCustomerLedger(month)`
+
+Mutations:
+- `login(email, otp)`
+- `createCustomer(input)`
+- `recordAttendance(input)`
+- `setOptOut(input)` — enforces 10:00 AM same-day cutoff
+- `setPauseWindow(input)`
+- `upsertPlan(input)`
+- `markPayment(input)`
+
+## Backend folder structure
+```
+src/
+├── auth.js        # JWT helpers (createToken + middleware context helper)
+├── data/
+│   └── store.js   # In-memory users/customers/plans/attendance/pause data + helper functions
+├── schema.js      # GraphQL schema + resolvers + dashboard/monthly usage calculators
+└── server.js      # Express bootstrap + Apollo Server wiring
+```
+
+## Frontend (React Native Expo + Apollo) screen & navigation map
+- **Auth stack**: Login (email + OTP for now), Forgot/OTP verify
+- **Owner/Runner tabs**: Dashboard, Customers list & detail, Attendance (today), Billing, Settings
+- **Customer tabs**: Home (today’s status + Skip Today CTA), Calendar (pause date range), Billing (monthly summary, pay button), Profile
+- Navigation: Root stack → Tab navigator (role-based) → Detail stacks (Customer detail, Invoice detail)
+
+## Roadmap (MVP → production)
+1. **MVP**: Solidify schema, hook Prisma to Postgres, implement auth, attendance, opt-out, pause, billing mark-paid; ship RN app with cutoff-aware Skip Today.
+2. **Beta hardening**: Add pagination + filtering, add invoice generation, integrate OTP auth, add background sync/offline queue in mobile, add CI tests.
+3. **Growth**: Multi-mess marketplace, referral + coupon system, per-area routing, analytics dashboards, observability + rate limits.
+4. **Production**: Docker/K8s deploy, backups, alerting, logging, Sentry, load tests.
+
+## Admin dashboard layout
+- **Top cards**: Scheduled vs Skipped vs Paused vs Delivered (today), unpaid customers, alerts
+- **Skip list**: Table of customers who opted out or are paused (reason, slot, timestamp, recordedBy)
+- **Runner prep**: Count of boxes/rotis/veg per slot, grouped by route
+- **Billing**: Unpaid list with lastPaymentAt and monthlyRate; CTA to mark paid
+- **Usage panel**: Monthly boxes taken per customer; download CSV for billing
+
+## Edge cases to cover
+- Same-day skip after cutoff → block and surface contact CTA
+- Overlapping pause windows → merge/validate when moving to DB
+- Plan types (1 vs 2 meals/day) → adjust counts and pricing per slot
+- Month boundary (pause spanning months) → pro-rate boxes and invoices
+- Manual overrides: admin can mark attendance absent/present even if paused (with audit log later)
+
+## Testing & deployment checklist
+- Unit: resolver logic for cutoff, pause merge, monthly usage math
+- Integration: auth guard + role checks, dashboard counts
+- E2E (API): Skip Today, Pause Range, markPaid flows
+- Security: JWT expiry/refresh, password hashing, rate limits
+- Deployment: env vars for DB + JWT secret, migrations (Prisma), PM2/Node service or Docker, health checks, backups, monitoring
+
+## Suggested app/brand names
+- **DabbaTrack** (default in this repo)
+- **TiffinTrail**
+- **LunchLoop**
+- **PunePeti**
+- **MessMeter**
+
+## Revenue ideas
+- Monthly SaaS for mess owners (per active customer or per kitchen)
+- Add-on fees for invoicing/UPI collection tooling
+- Featured placement for partner messes when marketplace launches
+- Analytics upsell (cohort churn, skip patterns) for larger kitchens
+
+## Sample operations
 Login and reuse the JWT in the `Authorization: Bearer <token>` header.
 
 ```graphql
 mutation Login {
-  login(email: "boss@dabbatrack.in", password: "admin123") {
+  login(email: "boss@dabbatrack.in", otp: "2345") {
+    message
     token
     user { id name role }
   }
@@ -57,7 +169,7 @@ mutation CreateCustomer {
 }
 ```
 
-Customer or staff opts out for a day/slot:
+Customer or staff opts out for a day/slot (blocks after cutoff if same-day):
 ```graphql
 mutation SkipTiffin {
   setOptOut(input: {
@@ -75,6 +187,38 @@ mutation SkipTiffin {
 }
 ```
 
+Pause for a range of dates:
+```graphql
+mutation PauseRange {
+  setPauseWindow(input: {
+    customerId: "cust-300"
+    startDate: "2025-02-01"
+    endDate: "2025-02-05"
+    reason: "Vacation"
+  }) {
+    id
+    startDate
+    endDate
+    reason
+  }
+}
+```
+
+Monthly ledger (per user, lunch/dinner counts, totals):
+```graphql
+query MonthlyLedger {
+  monthlyCustomerLedger(month: "2025-01-01") {
+    customer { id name }
+    month
+    lunchCount
+    dinnerCount
+    totalTaken
+    ratePerTiffin
+    totalAmount
+  }
+}
+```
+
 Vendor dashboard snapshot for a date:
 ```graphql
 query Dashboard {
@@ -83,6 +227,7 @@ query Dashboard {
     totalCustomers
     scheduledCount
     skippedCount
+    pausedCount
     deliveredCount
     unpaidCount
     alerts
@@ -91,37 +236,20 @@ query Dashboard {
 }
 ```
 
-## Data model (in-memory)
-- **Users**: seeded admin + dispatch; carries role for auth.
-- **Customers**: name, contact, dietary notes, status (`ACTIVE`/`PAUSED`).
-- **Attendance**: date + slot (LUNCH/DINNER) + status (`PRESENT`, `ABSENT`, `SKIPPED` for opt-outs).
-- **TiffinPlan**: monthly rate, billing cycle, last payment status/at.
-
-## Product roadmap & features
-- **Day-to-day ops**: daily opt-out list, runner checklist per route, SMS/WhatsApp nudges, inventory (rotis/gravies count) derived from scheduledCount.
-- **Customer self-service**: pause/resume window, one-click "no tiffin today" cutoff time, allergy/diet tags per weekday.
-- **Billing**: monthly invoice PDF/email, pro-rated credits for skipped meals, UPI QR for one-time monthly payments.
-- **Analytics**: churn flags (paused > 7 days), meal quality feedback, late delivery tracker (optional).
-- **Hardening**: replace in-memory store with SQL + Prisma migrations, add refresh tokens, rate limiting, and observability (OpenTelemetry).
-
-## Suggested app/brand names
-- **DabbaTrack** (default in this repo)
-- **TiffinTrail**
-- **LunchLoop**
-
-## Frontend & mobile structure (suggested)
-- **Web**: Next.js or Remix with Apollo Client; role-based dashboard (owner vs. runner vs. customer).
-- **Mobile**: React Native + Expo; offline queue for attendance and opt-outs when network drops.
-- **UI primitives**: reusable cards for customer summary, attendance timeline, and a "Skip today" CTA for customers.
-
-## Figma prompt to accelerate UI ideation
-Copy/paste this into ChatGPT or Figma AI to generate wireframes:
-
-> Design a responsive web & mobile dashboard for an Indian dabba/tiffin service called "DabbaTrack". Screens needed: (1) Owner dashboard with daily scheduled vs. skipped counts, opt-out list, unpaid accounts, and route checklist; (2) Customer self-service page to pause a day/slot and see monthly bill; (3) Runner view to mark delivered/absent per stop. Use a warm Indian lunchbox theme, highlight CTA "Skip today" and "Mark delivered", and include clear status chips for ACTIVE/PAUSED/DUE.
+Monthly usage for billing sanity:
+```graphql
+query Usage {
+  monthlyUsage(month: "2025-01") {
+    customer { id name }
+    boxesTaken
+    skipped
+    paused
+  }
+}
+```
 
 ## Next steps (when you swap the store for a real DB)
-1. Add Prisma + Postgres, model `User`, `Customer`, `Attendance`, `TiffinPlan`, and `Invoice`.
+1. Add Prisma + Postgres models and migrations for all tables above.
 2. Replace in-memory resolvers with Prisma queries; add pagination for customer lists.
 3. Add testing (Jest) and CI.
 4. Containerize with Docker for deployment.
-

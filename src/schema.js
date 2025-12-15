@@ -1,16 +1,15 @@
 const { gql } = require('apollo-server-express');
-const bcrypt = require('bcryptjs');
 const { createToken } = require('./auth');
-const {
-  users,
-  customers,
-  attendanceRecords,
-  tiffinPlans,
-  upsertAttendance,
-  createCustomer,
-  upsertPlan,
-  markPayment,
-} = require('./data/store');
+const usersRepo = require('./modules/users/repository');
+const customersRepo = require('./modules/customers/repository');
+const attendanceRepo = require('./modules/attendance/repository');
+const plansRepo = require('./modules/plans/repository');
+const pausesRepo = require('./modules/pauses/repository');
+const dashboardRepo = require('./modules/dashboard/repository');
+
+const CUSTOMER_OTP = process.env.CUSTOMER_OTP || '1234';
+const VENDOR_OTP = process.env.VENDOR_OTP || '2345';
+const CUTOFF_HOUR_IST = 10; // 10:00 AM local time cutoff for same-day skips
 
 const typeDefs = gql`
   enum Role {
@@ -41,6 +40,9 @@ const typeDefs = gql`
     email: String!
     phone: String
     role: Role!
+    description: String
+    handlesLunch: Boolean!
+    handlesDinner: Boolean!
   }
 
   type Customer {
@@ -52,7 +54,10 @@ const typeDefs = gql`
     dietaryNotes: String
     status: String!
     createdAt: String!
+    vendorUserId: ID
+    vendor: User
     plan: TiffinPlan
+    pauseWindows: [PauseWindow!]!
     latestAttendance: [Attendance!]!
   }
 
@@ -78,9 +83,19 @@ const typeDefs = gql`
     lastPaymentAt: String
   }
 
+  type PauseWindow {
+    id: ID!
+    customerId: ID!
+    startDate: String!
+    endDate: String!
+    reason: String
+    createdBy: ID!
+  }
+
   type AuthPayload {
     token: String!
     user: User!
+    message: String!
   }
 
   type DashboardSummary {
@@ -91,6 +106,7 @@ const typeDefs = gql`
     skippedCount: Int!
     deliveredCount: Int!
     unpaidCount: Int!
+    pausedCount: Int!
     optOuts: [Attendance!]!
     alerts: [String!]!
   }
@@ -98,8 +114,26 @@ const typeDefs = gql`
   type BillingSummary {
     customer: Customer!
     plan: TiffinPlan!
-    balanceDue: Float!
-    nextBillingDate: String!
+    balanceDue: Float
+    nextBillingDate: String
+  }
+
+  type CustomerUsage {
+    customer: Customer!
+    month: String!
+    boxesTaken: Int!
+    skipped: Int!
+    paused: Int!
+  }
+
+  type MonthlyCustomerLedger {
+    customer: Customer!
+    month: String!
+    lunchCount: Int!
+    dinnerCount: Int!
+    totalTaken: Int!
+    ratePerTiffin: Float!
+    totalAmount: Float!
   }
 
   input CustomerInput {
@@ -108,6 +142,7 @@ const typeDefs = gql`
     phone: String
     address: String
     dietaryNotes: String
+    vendorUserId: ID!
   }
 
   input AttendanceInput {
@@ -125,6 +160,13 @@ const typeDefs = gql`
     reason: String
   }
 
+  input PauseInput {
+    customerId: ID!
+    startDate: String!
+    endDate: String!
+    reason: String
+  }
+
   input PlanInput {
     customerId: ID!
     monthlyRate: Float!
@@ -138,6 +180,28 @@ const typeDefs = gql`
     paidAt: String
   }
 
+  input CreateUserInput {
+    name: String!
+    email: String!
+    phone: String!
+    password: String!
+    description: String
+    role: Role
+    handlesLunch: Boolean!
+    handlesDinner: Boolean!
+  }
+
+  input UpdateUserInput {
+    name: String
+    email: String
+    phone: String
+    password: String
+    description: String
+    role: Role
+    handlesLunch: Boolean
+    handlesDinner: Boolean
+  }
+
   type Query {
     me: User
     customers(status: String): [Customer!]!
@@ -146,13 +210,18 @@ const typeDefs = gql`
     optOuts(date: String!, slot: Slot): [Attendance!]!
     dashboard(date: String!): DashboardSummary!
     billingSummary: [BillingSummary!]!
+    monthlyUsage(month: String!): [CustomerUsage!]!
+    monthlyCustomerLedger(month: String!): [MonthlyCustomerLedger!]!
   }
 
   type Mutation {
-    login(email: String!, password: String!): AuthPayload!
+    login(email: String!, otp: String!): AuthPayload!
+    createUser(input: CreateUserInput!): User!
+    updateUser(id: ID!, input: UpdateUserInput!): User!
     createCustomer(input: CustomerInput!): Customer!
     recordAttendance(input: AttendanceInput!): Attendance!
     setOptOut(input: OptOutInput!): Attendance!
+    setPauseWindow(input: PauseInput!): PauseWindow!
     upsertPlan(input: PlanInput!): TiffinPlan!
     markPayment(input: PaymentInput!): TiffinPlan!
   }
@@ -171,96 +240,107 @@ function requireAdmin(user) {
   }
 }
 
-function attachPlan(customer) {
-  return tiffinPlans.find((plan) => plan.customerId === customer.id) || null;
+function vendorScope(user) {
+  return user.role === 'ADMIN' ? null : user.id;
 }
 
-function findAttendance({ date, slot, customerId }) {
-  return attendanceRecords.filter((record) => {
-    if (date && record.date !== date) return false;
-    if (slot && record.slot !== slot) return false;
-    if (customerId && record.customerId !== customerId) return false;
-    return true;
-  });
-}
+function enforceCutoff(date) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  if (date !== todayIso) return;
 
-function calculateDashboard(date) {
-  const optOuts = findAttendance({ date }).filter((record) => record.status === 'SKIPPED');
-  const delivered = findAttendance({ date }).filter((record) => record.status === 'PRESENT');
-  const activeCustomers = customers.filter((c) => c.status === 'ACTIVE');
-  const activePlans = tiffinPlans.filter((plan) => plan.status === 'ACTIVE');
-
-  const alerts = [];
-  const unpaidCount = tiffinPlans.filter((plan) => plan.lastPaymentStatus !== 'PAID').length;
-  if (unpaidCount > 0) {
-    alerts.push(`${unpaidCount} customer(s) have dues pending`);
+  const cutoff = new Date(`${date}T${String(CUTOFF_HOUR_IST).padStart(2, '0')}:00:00`);
+  const now = new Date();
+  if (now > cutoff) {
+    throw new Error(`Cutoff passed for ${date}. Please contact support to skip manually.`);
   }
-  if (optOuts.length > 0) {
-    alerts.push(`${optOuts.length} opted out for ${date}`);
-  }
-
-  return {
-    date,
-    totalCustomers: customers.length,
-    activePlans: activePlans.length,
-    scheduledCount: Math.max(activeCustomers.length - optOuts.length, 0),
-    skippedCount: optOuts.length,
-    deliveredCount: delivered.length,
-    unpaidCount,
-    optOuts,
-    alerts,
-  };
 }
 
 const resolvers = {
   Query: {
-    me: (_parent, _args, context) => context.user || null,
-    customers: (_parent, args) => {
-      if (args.status) {
-        return customers.filter((customer) => customer.status === args.status);
-      }
-      return customers;
+    me: (_parent, _args, context) => {
+      requireAuth(context.user);
+      return context.user;
     },
-    customer: (_parent, args) => customers.find((customer) => customer.id === args.id) || null,
-    attendance: (_parent, args) => findAttendance(args),
-    optOuts: (_parent, args) => findAttendance({ date: args.date, slot: args.slot }).filter((item) => item.status === 'SKIPPED'),
-    dashboard: (_parent, args) => calculateDashboard(args.date),
-    billingSummary: () =>
-      tiffinPlans.map((plan) => {
-        const customer = customers.find((c) => c.id === plan.customerId);
-        const balanceDue = plan.lastPaymentStatus === 'PAID' ? 0 : plan.monthlyRate;
-        return {
-          customer,
-          plan,
-          balanceDue,
-          nextBillingDate: plan.startDate,
-        };
-      }),
+    customers: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return customersRepo.listCustomers({
+        status: args.status,
+        vendorUserId: vendorScope(context.user),
+      });
+    },
+    customer: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return customersRepo.getCustomer({
+        id: args.id,
+        vendorUserId: vendorScope(context.user),
+      });
+    },
+    attendance: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return attendanceRepo.listAttendance(args);
+    },
+    optOuts: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return (await attendanceRepo.listAttendance({ date: args.date, slot: args.slot })).filter(
+        (record) => record.status === 'SKIPPED',
+      );
+    },
+    dashboard: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return dashboardRepo.dashboardSummary(args.date);
+    },
+    billingSummary: async (_parent, _args, context) => {
+      requireAuth(context.user);
+      return dashboardRepo.billingSummary();
+    },
+    monthlyUsage: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return dashboardRepo.monthlyUsage(args.month);
+    },
+    monthlyCustomerLedger: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return dashboardRepo.monthlyCustomerLedger({
+        month: args.month,
+        vendorUserId: vendorScope(context.user),
+      });
+    },
   },
   Mutation: {
-    login: (_parent, args) => {
-      const user = users.find((candidate) => candidate.email === args.email);
+    login: async (_parent, args) => {
+      const user = await usersRepo.findByEmail(args.email);
       if (!user) {
         throw new Error('User not found');
       }
-      const passwordOk = bcrypt.compareSync(args.password, user.passwordHash);
-      if (!passwordOk) {
-        throw new Error('Invalid credentials');
+      const expectedOtp = user.role === 'CUSTOMER' ? CUSTOMER_OTP : VENDOR_OTP;
+      if (args.otp !== expectedOtp) {
+        throw new Error('Invalid OTP');
       }
       const token = createToken(user);
-      return { token, user };
+      return { token, user, message: 'User authenticated successfully' };
     },
-    createCustomer: (_parent, args, context) => {
+    createUser: async (_parent, args, context) => {
       requireAdmin(context.user);
-      return createCustomer(args.input);
+      return usersRepo.createUser({
+        ...args.input,
+        role: args.input.role || 'DISPATCH',
+      });
     },
-    recordAttendance: (_parent, args, context) => {
-      requireAuth(context.user);
-      return upsertAttendance({ ...args.input, recordedBy: context.user.id });
+    updateUser: async (_parent, args, context) => {
+      requireAdmin(context.user);
+      return usersRepo.updateUser(args.id, args.input);
     },
-    setOptOut: (_parent, args, context) => {
+    createCustomer: async (_parent, args, context) => {
+      requireAdmin(context.user);
+      return customersRepo.createCustomer(args.input);
+    },
+    recordAttendance: async (_parent, args, context) => {
       requireAuth(context.user);
-      return upsertAttendance({
+      return attendanceRepo.upsertAttendance({ ...args.input, recordedBy: context.user.id });
+    },
+    setOptOut: async (_parent, args, context) => {
+      requireAuth(context.user);
+      enforceCutoff(args.input.date);
+      return attendanceRepo.upsertAttendance({
         customerId: args.input.customerId,
         date: args.input.date,
         slot: args.input.slot,
@@ -269,29 +349,50 @@ const resolvers = {
         recordedBy: context.user.id,
       });
     },
-    upsertPlan: (_parent, args, context) => {
-      requireAdmin(context.user);
-      return upsertPlan(args.input);
-    },
-    markPayment: (_parent, args, context) => {
-      requireAdmin(context.user);
-      return markPayment({
+    setPauseWindow: async (_parent, args, context) => {
+      requireAuth(context.user);
+      return pausesRepo.createPauseWindow({
         customerId: args.input.customerId,
-        status: args.input.status,
-        paidAt: args.input.paidAt,
+        startDate: args.input.startDate,
+        endDate: args.input.endDate,
+        reason: args.input.reason,
+        createdBy: context.user.id,
       });
+    },
+    upsertPlan: async (_parent, args, context) => {
+      requireAdmin(context.user);
+      return plansRepo.upsertPlan(args.input);
+    },
+    markPayment: async (_parent, args, context) => {
+      requireAdmin(context.user);
+      return plansRepo.markPayment(args.input);
     },
   },
   Customer: {
-    plan: (customer) => attachPlan(customer),
-    latestAttendance: (customer) => findAttendance({ customerId: customer.id }).slice(-5),
+    vendor: (customer) => (customer.vendorUserId ? usersRepo.findById(customer.vendorUserId) : null),
+    plan: (customer) => plansRepo.getPlanForCustomer(customer.id),
+    pauseWindows: (customer) => pausesRepo.listByCustomer(customer.id),
+    latestAttendance: (customer) => attendanceRepo.latestForCustomer(customer.id),
   },
   Attendance: {
-    customer: (attendance) => customers.find((c) => c.id === attendance.customerId),
+    customer: (attendance, _args, context) => {
+      requireAuth(context.user);
+      return customersRepo.getCustomer({
+        id: attendance.customerId,
+        vendorUserId: vendorScope(context.user),
+      });
+    },
+  },
+  BillingSummary: {
+    customer: (summary) => summary.customer,
+    plan: (summary) => summary.plan,
+  },
+  CustomerUsage: {
+    customer: (usage) => usage.customer,
+  },
+  MonthlyCustomerLedger: {
+    customer: (ledger) => ledger.customer,
   },
 };
 
-module.exports = {
-  typeDefs,
-  resolvers,
-};
+module.exports = { typeDefs, resolvers };

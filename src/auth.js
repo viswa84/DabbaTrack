@@ -1,34 +1,52 @@
 const jwt = require('jsonwebtoken');
-const { users } = require('./data/store');
+const usersRepo = require('./modules/users/repository');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dabba-track-development-secret';
+const JWT_SECRET = process.env.JWT_SECRET || 'replace-this-secret';
+const TOKEN_TTL = process.env.JWT_EXPIRES_IN || '12h';
 
 function createToken(user) {
-  return jwt.sign(
-    {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-    },
-    JWT_SECRET,
-    { expiresIn: '7d' },
-  );
+  if (!user || !user.id) {
+    throw new Error('Cannot create token without a user id');
+  }
+  const payload = {
+    sub: user.id,
+    role: user.role,
+    email: user.email,
+    name: user.name,
+  };
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_TTL });
 }
 
-function authMiddleware(req, _res, next) {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.replace('Bearer ', '');
-    try {
-      const payload = jwt.verify(token, JWT_SECRET);
-      const user = users.find((candidate) => candidate.id === payload.id);
-      if (user) {
-        req.user = { id: user.id, role: user.role, email: user.email, name: user.name };
-      }
-    } catch (err) {
-      console.warn('Invalid token provided', err.message);
-    }
+function extractToken(req) {
+  const authHeader = req.headers.authorization || '';
+  if (typeof authHeader !== 'string') {
+    return null;
   }
+  const [scheme, token] = authHeader.split(' ');
+  if (!token || scheme.toLowerCase() !== 'bearer') {
+    return null;
+  }
+  return token.trim();
+}
+
+async function resolveUser(token) {
+  if (!token) {
+    return null;
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (!payload?.sub) {
+      return null;
+    }
+    return usersRepo.findById(payload.sub);
+  } catch (err) {
+    console.warn('JWT verification failed', err.message);
+    return null;
+  }
+}
+
+async function authMiddleware(req, _res, next) {
+  req.user = await resolveUser(extractToken(req));
   next();
 }
 

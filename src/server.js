@@ -22,7 +22,7 @@ async function startServer() {
   app.get('/', (_req, res) => {
     res.json({
       name: 'DabbaTrack API',
-      description: 'GraphQL API for dabba (tiffin) logistics, attendance, and billing',
+      description: 'GraphQL API for dabba (tiffin), attendance, and billing',
       graphqlPath: '/graphql',
     });
   });

@@ -83,6 +83,17 @@ const attendanceRecords = [
   },
 ];
 
+const pauseWindows = [
+  {
+    id: 'pause-1',
+    customerId: 'cust-300',
+    startDate: '2025-01-18',
+    endDate: '2025-01-25',
+    reason: 'On vacation',
+    createdBy: 'user-admin',
+  },
+];
+
 const tiffinPlans = [
   {
     id: 'plan-100',
@@ -131,6 +142,23 @@ function upsertAttendance({ customerId, date, slot, status, note, recordedBy }) 
     attendanceRecords.push(record);
   }
   return record;
+}
+
+function addPauseWindow({ customerId, startDate, endDate, reason, createdBy }) {
+  const window = {
+    id: generateId('pause'),
+    customerId,
+    startDate,
+    endDate,
+    reason: reason || 'Paused by customer',
+    createdBy,
+  };
+  pauseWindows.push(window);
+  return window;
+}
+
+function isPausedOnDate(customerId, date) {
+  return pauseWindows.some((window) => window.customerId === customerId && window.startDate <= date && date <= window.endDate);
 }
 
 function createCustomer(payload) {
@@ -182,8 +210,11 @@ module.exports = {
   users,
   customers,
   attendanceRecords,
+  pauseWindows,
   tiffinPlans,
   upsertAttendance,
+  addPauseWindow,
+  isPausedOnDate,
   createCustomer,
   upsertPlan,
   markPayment,
