@@ -1,4 +1,5 @@
 const { query } = require('../../db/client');
+const { requireValidIndianMobile } = require('../../utils/validators');
 
 const CUSTOMER_COLUMNS = `
   c.id,
@@ -53,10 +54,11 @@ async function createCustomer({ name, email, phone, address, dietaryNotes, vendo
   if (!vendorUserId) {
     throw new Error('vendorUserId is required to create a customer');
   }
+  const normalizedPhone = requireValidIndianMobile(phone, 'Customer phone');
   const { rows } = await query(INSERT_CUSTOMER, [
     name,
     email || null,
-    phone || null,
+    normalizedPhone,
     address || null,
     dietaryNotes || null,
     vendorUserId,

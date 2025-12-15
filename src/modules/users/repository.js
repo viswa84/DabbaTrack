@@ -1,5 +1,5 @@
-const bcrypt = require('bcryptjs');
 const { query } = require('../../db/client');
+const { requireValidIndianMobile } = require('../../utils/validators');
 
 const USER_COLUMNS = `
   id,
@@ -15,7 +15,7 @@ const USER_COLUMNS = `
 // Finds a user by email for login and profile hydration.
 // language=SQL
 const FIND_USER_BY_EMAIL = `
-  SELECT ${USER_COLUMNS}, password_hash
+  SELECT ${USER_COLUMNS}
   FROM users
   WHERE email = $1
 `;
@@ -51,21 +51,17 @@ async function createUser({
   email,
   phone,
   role = 'DISPATCH',
-  password,
   description,
   handlesLunch = false,
   handlesDinner = false,
 }) {
-  if (!password) {
-    throw new Error('Password required for user creation');
-  }
-  const passwordHash = await bcrypt.hash(password, 10);
+  const normalizedPhone = requireValidIndianMobile(phone, 'User phone');
   const params = [
     name,
     email,
-    phone,
+    normalizedPhone,
     role,
-    passwordHash,
+    null,
     description || null,
     handlesLunch,
     handlesDinner,
@@ -87,16 +83,14 @@ async function updateUser(id, fields) {
 
   if (fields.name !== undefined) setField('name', fields.name);
   if (fields.email !== undefined) setField('email', fields.email);
-  if (fields.phone !== undefined) setField('phone', fields.phone);
+  if (fields.phone !== undefined) {
+    const normalizedPhone = requireValidIndianMobile(fields.phone, 'User phone');
+    setField('phone', normalizedPhone);
+  }
   if (fields.role !== undefined) setField('role', fields.role);
   if (fields.description !== undefined) setField('description', fields.description);
   if (fields.handlesLunch !== undefined) setField('serves_lunch', fields.handlesLunch);
   if (fields.handlesDinner !== undefined) setField('serves_dinner', fields.handlesDinner);
-
-  if (fields.password) {
-    const passwordHash = await bcrypt.hash(fields.password, 10);
-    setField('password_hash', passwordHash);
-  }
 
   if (updates.length === 0) {
     throw new Error('No fields provided for update');

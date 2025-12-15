@@ -21,7 +21,7 @@ async function startServer() {
 
   app.get('/', (_req, res) => {
     res.json({
-      name: 'DabbaTrack API',
+      name: 'DabbaTrack API by vishwanth Gouda',
       description: 'GraphQL API for dabba (tiffin), attendance, and billing',
       graphqlPath: '/graphql',
     });

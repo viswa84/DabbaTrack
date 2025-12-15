@@ -139,10 +139,10 @@ const typeDefs = gql`
   input CustomerInput {
     name: String!
     email: String
-    phone: String
+    phone: String!
     address: String
     dietaryNotes: String
-    vendorUserId: ID!
+    vendorUserId: ID
   }
 
   input AttendanceInput {
@@ -184,7 +184,6 @@ const typeDefs = gql`
     name: String!
     email: String!
     phone: String!
-    password: String!
     description: String
     role: Role
     handlesLunch: Boolean!
@@ -195,7 +194,6 @@ const typeDefs = gql`
     name: String
     email: String
     phone: String
-    password: String
     description: String
     role: Role
     handlesLunch: Boolean
@@ -330,8 +328,20 @@ const resolvers = {
       return usersRepo.updateUser(args.id, args.input);
     },
     createCustomer: async (_parent, args, context) => {
-      requireAdmin(context.user);
-      return customersRepo.createCustomer(args.input);
+      requireAuth(context.user);
+      if (context.user.role === 'CUSTOMER') {
+        throw new Error('Customers are not permitted to create customer records');
+      }
+      const { vendorUserId: requestedVendorId, ...payload } = args.input;
+      const vendorUserId =
+        context.user.role === 'ADMIN' ? requestedVendorId : context.user.id;
+      if (!vendorUserId) {
+        throw new Error('vendorUserId is required to create a customer');
+      }
+      return customersRepo.createCustomer({
+        ...payload,
+        vendorUserId,
+      });
     },
     recordAttendance: async (_parent, args, context) => {
       requireAuth(context.user);
