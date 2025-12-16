@@ -12,20 +12,12 @@ const USER_COLUMNS = `
   serves_dinner AS "handlesDinner"
 `;
 
-// Finds a user by email for login and profile hydration.
+// Finds a user by phone for login and profile hydration.
 // language=SQL
-const FIND_USER_BY_EMAIL = `
+const FIND_USER_BY_PHONE = `
   SELECT ${USER_COLUMNS}
   FROM users
-  WHERE email = $1
-`;
-
-// Fetches a user by id for JWT hydration.
-// language=SQL
-const FIND_USER_BY_ID = `
-  SELECT ${USER_COLUMNS}
-  FROM users
-  WHERE id = $1
+  WHERE phone = $1
 `;
 
 // Creates a new user with a salted password hash.
@@ -36,8 +28,17 @@ const INSERT_USER = `
   RETURNING ${USER_COLUMNS}
 `;
 
-async function findByEmail(email) {
-  const { rows } = await query(FIND_USER_BY_EMAIL, [email]);
+// Fetches a user by id for JWT hydration.
+// language=SQL
+const FIND_USER_BY_ID = `
+  SELECT ${USER_COLUMNS}
+  FROM users
+  WHERE id = $1
+`;
+
+async function findByPhone(phone) {
+  const normalizedPhone = requireValidIndianMobile(phone, 'User phone');
+  const { rows } = await query(FIND_USER_BY_PHONE, [normalizedPhone]);
   return rows[0];
 }
 
@@ -108,7 +109,7 @@ async function updateUser(id, fields) {
 }
 
 module.exports = {
-  findByEmail,
+  findByPhone,
   findById,
   createUser,
   updateUser,

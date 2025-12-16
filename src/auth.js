@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const usersRepo = require('./modules/users/repository');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'replace-this-secret';
-const TOKEN_TTL = process.env.JWT_EXPIRES_IN || '12h';
+const TOKEN_TTL = process.env.JWT_EXPIRES_IN || '60d'; // default 60 days
 
 function createToken(user) {
   if (!user || !user.id) {

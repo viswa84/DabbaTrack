@@ -76,7 +76,7 @@ Queries:
 - `monthlyCustomerLedger(month)`
 
 Mutations:
-- `login(email, otp)`
+- `login(phone, otp)`
 - `createCustomer(input)`
 - `recordAttendance(input)`
 - `setOptOut(input)` — enforces 10:00 AM same-day cutoff
@@ -145,7 +145,7 @@ Login and reuse the JWT in the `Authorization: Bearer <token>` header.
 
 ```graphql
 mutation Login {
-  login(email: "boss@dabbatrack.in", otp: "2345") {
+  login(phone: "+91-9876500000", otp: "2345") {
     message
     token
     user { id name role }
