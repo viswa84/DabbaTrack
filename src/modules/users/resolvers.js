@@ -6,6 +6,19 @@ const { requireValidIndianMobile } = require('../../utils/validators');
 const CUSTOMER_OTP = process.env.CUSTOMER_OTP || '1234';
 const VENDOR_OTP = process.env.VENDOR_OTP || '2345';
 
+function assertRoleForLogin(user, requestedRole) {
+  if (requestedRole === 'ADMIN') {
+    if (user.role !== 'ADMIN') {
+      throw new Error('User is not an admin');
+    }
+    return;
+  }
+  // Default: customer login path
+  if (user.role !== 'CUSTOMER') {
+    throw new Error('User is not a customer');
+  }
+}
+
 const resolvers = {
   Query: {
     me: (_parent, _args, context) => {
@@ -14,12 +27,27 @@ const resolvers = {
     },
   },
   Mutation: {
+    requestOtp: async (_parent, args) => {
+      const normalizedPhone = requireValidIndianMobile(args.phone, 'User phone');
+      const user = await usersRepo.findByPhone(normalizedPhone);
+      if (!user) {
+        throw new Error('User not found');
+      }
+      assertRoleForLogin(user, args.role);
+      const otp = user.role === 'CUSTOMER' ? CUSTOMER_OTP : VENDOR_OTP;
+      return {
+        success: true,
+        message: `OTP sent to ${normalizedPhone}`,
+        otp, // surfaced for dev/testing; replace with SMS in production
+      };
+    },
     login: async (_parent, args) => {
       const normalizedPhone = requireValidIndianMobile(args.phone, 'User phone');
       const user = await usersRepo.findByPhone(normalizedPhone);
       if (!user) {
         throw new Error('User not found');
       }
+      assertRoleForLogin(user, args.role);
       const expectedOtp = user.role === 'CUSTOMER' ? CUSTOMER_OTP : VENDOR_OTP;
       if (args.otp !== expectedOtp) {
         throw new Error('Invalid OTP');

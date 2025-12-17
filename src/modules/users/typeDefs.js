@@ -18,6 +18,12 @@ const typeDefs = gql`
     message: String!
   }
 
+  type OtpRequest {
+    success: Boolean!
+    message: String!
+    otp: String
+  }
+
   input CreateUserInput {
     name: String!
     email: String
@@ -43,7 +49,8 @@ const typeDefs = gql`
   }
 
   extend type Mutation {
-    login(phone: String!, otp: String!): AuthPayload!
+    requestOtp(phone: String!, role: Role): OtpRequest!
+    login(phone: String!, otp: String!, role: Role): AuthPayload!
     createUser(input: CreateUserInput!): User!
     updateUser(id: ID!, input: UpdateUserInput!): User!
   }
